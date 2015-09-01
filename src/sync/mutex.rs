@@ -27,17 +27,18 @@ use std::error::Error;
 use std::marker::Reflect;
 use std::ops::{Deref, DerefMut};
 
-use scheduler::Scheduler;
+use sync::WaitList;
 
 pub type LockResult<G> = Result<G, PoisonError<G>>;
 pub type TryLockResult<G> = Result<G, PoisonError<G>>;
 
-const POISON_RETRY_COUNT: usize = 102400;
+const SPIN_COUNT: usize = 32;
 
 /// A mutual exclusion primitive useful for protecting shared data
 pub struct Mutex<T> {
     data: UnsafeCell<T>,
     lock: AtomicBool,
+    wait_list: UnsafeCell<WaitList>,
 }
 
 impl<T> Mutex<T> {
@@ -46,20 +47,21 @@ impl<T> Mutex<T> {
         Mutex {
             data: UnsafeCell::new(data),
             lock: AtomicBool::new(false),
+            wait_list: UnsafeCell::new(WaitList::new()),
         }
     }
 
-    /// Acquires a mutex, blocking the current thread until it is able to do so.
+    /// Acquires a mutex, blocking the current coroutine until it is able to do so.
     pub fn lock<'a>(&'a self) -> LockResult<Guard<'a, T>> {
-        for _ in 0..POISON_RETRY_COUNT {
-            if self.lock.compare_and_swap(false, true, Ordering::SeqCst) == false {
-                return Ok(Guard::new(unsafe { &mut *self.data.get() }, self));
+        loop {
+            for _ in 0..SPIN_COUNT {
+                if self.lock.compare_and_swap(false, true, Ordering::SeqCst) == false {
+                    return Ok(Guard::new(unsafe { &mut *self.data.get() }, self));
+                }
             }
 
-            Scheduler::sched();
+            unsafe { &mut *self.wait_list.get() }.sleep();
         }
-
-        Err(PoisonError::new(Guard::new(unsafe { &mut *self.data.get() }, self)))
     }
 
     pub fn try_lock<'a>(&'a self) -> TryLockResult<Guard<'a, T>> {
@@ -94,6 +96,7 @@ impl<'a, T: 'a> Guard<'a, T> {
 impl<'a, T: 'a> Drop for Guard<'a, T> {
     fn drop(&mut self) {
         while self.mutex.lock.compare_and_swap(true, false, Ordering::SeqCst) == true {}
+        unsafe { &mut *self.mutex.wait_list.get() }.wake();
     }
 }
 

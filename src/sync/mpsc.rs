@@ -23,26 +23,35 @@
 //! Multi-producer, single-consumer FIFO queue communication primitives.
 
 pub use std::sync::mpsc::{SendError, TryRecvError, RecvError};
+use std::cell::UnsafeCell;
+use std::sync::Arc;
 
 use std::sync::mpsc;
 
-use sched;
+use sync::WaitList;
 
 #[derive(Clone)]
 pub struct Sender<T> {
     inner: mpsc::Sender<T>,
+    wait_list: Arc<UnsafeCell<WaitList>>,
 }
 
 unsafe impl<T: Send> Send for Sender<T> {}
+unsafe impl<T: Send> Send for Receiver<T> {}
 
 impl<T> Sender<T> {
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        self.inner.send(t)
+        try!(self.inner.send(t));
+
+        unsafe { &mut *self.wait_list.get() }.wake();
+
+        Ok(())
     }
 }
 
 pub struct Receiver<T> {
     inner: mpsc::Receiver<T>,
+    wait_list: Arc<UnsafeCell<WaitList>>,
 }
 
 impl<T> Receiver<T> {
@@ -58,7 +67,7 @@ impl<T> Receiver<T> {
                 Err(TryRecvError::Disconnected) => return Err(RecvError),
             }
 
-            sched();
+            unsafe { &mut *self.wait_list.get() }.sleep();
         }
     }
 }
@@ -66,7 +75,20 @@ impl<T> Receiver<T> {
 /// Create a channel pair
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let (tx, rx) = mpsc::channel();
-    (Sender { inner: tx }, Receiver { inner: rx })
+
+    let wait_list = Arc::new(UnsafeCell::new(WaitList::new()));
+
+    let tx = Sender {
+        inner: tx,
+        wait_list: wait_list.clone()
+    };
+
+    let rx = Receiver {
+        inner: rx,
+        wait_list: wait_list
+    };
+
+    (tx, rx)
 }
 
 #[cfg(test)]

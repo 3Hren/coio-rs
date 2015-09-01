@@ -22,7 +22,51 @@
 
 //! Coroutine synchronization
 
+use std::collections::VecDeque;
+
+use coroutine::{Coroutine};
+
 pub use self::mutex::Mutex;
 
 pub mod mutex;
 pub mod mpsc;
+
+use runtime::processor::Processor;
+
+struct WaitList {
+    inner: VecDeque<*mut Coroutine>,
+}
+
+impl WaitList {
+    fn new() -> WaitList {
+        WaitList {
+            inner: VecDeque::new(),
+        }
+    }
+
+    fn sleep(&mut self) {
+        let current = unsafe {
+            Processor::current().running()
+        };
+
+        match current {
+            Some(coro) => {
+                self.inner.push_back(coro);
+            }
+            None => {}
+        }
+
+        Processor::current().block();
+    }
+
+    fn wake(&mut self) {
+        match self.inner.pop_front() {
+            Some(coro) => {
+                unsafe {
+                    Processor::current().ready(coro);
+                }
+            }
+            None => {}
+        }
+    }
+}
