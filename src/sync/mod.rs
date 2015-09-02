@@ -40,7 +40,7 @@ struct WaitList {
 impl WaitList {
     fn new() -> WaitList {
         WaitList {
-            inner: VecDeque::new(),
+            inner: VecDeque::with_capacity(64),
         }
     }
 
