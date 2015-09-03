@@ -326,7 +326,7 @@ impl Processor {
             None => {},
             Some(coro_ptr) => unsafe {
                 self.set_last_result(Ok(State::Blocked));
-                (&mut *coro_ptr).yield_to(&*self.main_coro);
+                (&mut *coro_ptr).yield_to(&*self.main_coro)
             }
         }
     }
