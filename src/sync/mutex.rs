@@ -60,7 +60,7 @@ impl<T> Mutex<T> {
                 }
             }
 
-            unsafe { &mut *self.wait_list.get() }.sleep();
+            self.wait_list().push().block();
         }
     }
 
@@ -70,6 +70,10 @@ impl<T> Mutex<T> {
         } else {
             Err(PoisonError::new(Guard::new(unsafe { &mut *self.data.get() }, self)))
         }
+    }
+
+    fn wait_list(&self) -> &mut WaitList {
+        unsafe { &mut *self.wait_list.get() }
     }
 }
 
@@ -96,7 +100,7 @@ impl<'a, T: 'a> Guard<'a, T> {
 impl<'a, T: 'a> Drop for Guard<'a, T> {
     fn drop(&mut self) {
         while self.mutex.lock.compare_and_swap(true, false, Ordering::SeqCst) == true {}
-        unsafe { &mut *self.mutex.wait_list.get() }.wake();
+        self.mutex.wait_list().wake();
     }
 }
 
@@ -172,10 +176,10 @@ mod test {
 
         let num_cloned = num.clone();
         Scheduler::spawn(move|| {
-            for _ in 0..100 {
+            for _ in 0..1000 {
                 let num = num_cloned.clone();
                 Scheduler::spawn(move|| {
-                    for _ in 0..10 {
+                    for _ in 0..100 {
                         let mut guard = num.lock().unwrap();
                         *guard += 1;
                     }
@@ -183,8 +187,8 @@ mod test {
             }
         });
 
-        Scheduler::run(10);
+        Scheduler::run(100);
 
-        assert_eq!(*num.lock().unwrap(), 1000);
+        assert_eq!(*num.lock().unwrap(), 100000);
     }
 }

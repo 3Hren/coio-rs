@@ -23,6 +23,7 @@
 //! Coroutine synchronization
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use coroutine::{Coroutine};
 
@@ -34,39 +35,62 @@ pub mod mpsc;
 use runtime::processor::Processor;
 
 struct WaitList {
+    /// Blocked coroutines queue.
     inner: VecDeque<*mut Coroutine>,
+
+    /// Protects the queue from concurrent access.
+    mutex: AtomicBool,
 }
 
 impl WaitList {
     fn new() -> WaitList {
         WaitList {
             inner: VecDeque::with_capacity(64),
+            mutex: AtomicBool::new(false),
         }
     }
 
-    fn sleep(&mut self) {
+    fn push(&mut self) -> &'static mut Processor {
         let current = unsafe {
             Processor::current().running()
         };
 
+        self.lock();
+
         match current {
-            Some(coro) => {
-                self.inner.push_back(coro);
-            }
+            Some(coro) => self.inner.push_back(coro),
             None => {}
         }
 
-        Processor::current().block();
+        self.unlock();
+
+        Processor::current()
     }
 
     fn wake(&mut self) {
+        self.lock();
+
         match self.inner.pop_front() {
-            Some(coro) => {
-                unsafe {
-                    Processor::current().ready(coro);
-                }
-            }
+            Some(coro) => unsafe { Processor::current().ready(coro); },
             None => {}
+        }
+
+        self.unlock();
+    }
+
+    fn lock(&mut self) {
+        loop {
+            if self.mutex.compare_and_swap(false, true, Ordering::SeqCst) == false {
+                break;
+            }
+        }
+    }
+
+    fn unlock(&mut self) {
+        loop {
+            if self.mutex.compare_and_swap(true, false, Ordering::SeqCst) == true {
+                break;
+            }
         }
     }
 }

@@ -67,7 +67,7 @@ impl<T> Receiver<T> {
                 Err(TryRecvError::Disconnected) => return Err(RecvError),
             }
 
-            unsafe { &mut *self.wait_list.get() }.sleep();
+            unsafe { &mut *self.wait_list.get() }.push().block();
         }
     }
 }
